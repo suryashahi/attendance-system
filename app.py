@@ -44,6 +44,7 @@ import qrcode
 from flask import Flask, g, jsonify, render_template, request, Response
 from openpyxl import Workbook
 from psycopg.rows import dict_row
+from urllib.parse import parse_qsl, urlencode
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_URL = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL")
@@ -59,6 +60,50 @@ app = Flask(
     static_url_path="/static",
 )
 app.config["JSON_SORT_KEYS"] = False
+
+
+def _restore_request_path(environ):
+    """Vercel invokes this app as /api/index and reports that as
+    PATH_INFO; the original path arrives in the __path query parameter
+    (see vercel.json). Restore it so Flask routing matches."""
+    pairs = parse_qsl(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    path = None
+    kept = []
+    for key, value in pairs:
+        if key == "__path" and path is None:
+            path = value
+        else:
+            kept.append((key, value))
+    if path is not None:
+        environ["QUERY_STRING"] = urlencode(kept)
+        path = "/" + path.lstrip("/")
+        for prefix in ("/api/index.py", "/api/index"):
+            if path == prefix:
+                path = "/"
+                break
+            if path.startswith(prefix + "/"):
+                path = path[len(prefix):] or "/"
+                break
+        return path
+    current = environ.get("PATH_INFO") or "/"
+    for prefix in ("/api/index.py", "/api/index"):
+        if current == prefix:
+            return "/"
+        if current.startswith(prefix + "/"):
+            return current[len(prefix):] or "/"
+    return current
+
+
+_inner_wsgi_app = app.wsgi_app
+
+
+def _path_fix_wsgi(environ, start_response):
+    environ["PATH_INFO"] = _restore_request_path(environ)
+    environ["SCRIPT_NAME"] = ""
+    return _inner_wsgi_app(environ, start_response)
+
+
+app.wsgi_app = _path_fix_wsgi
 
 
 @app.errorhandler(404)
