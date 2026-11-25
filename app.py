@@ -106,16 +106,6 @@ def _path_fix_wsgi(environ, start_response):
 app.wsgi_app = _path_fix_wsgi
 
 
-@app.errorhandler(404)
-def _debug_404(_e):
-    # TEMPORARY diagnostic: reveals what path Flask actually receives
-    # on Vercel. Remove once routing is confirmed working.
-    env = request.environ
-    keys = ("PATH_INFO", "SCRIPT_NAME", "QUERY_STRING", "REQUEST_URI",
-            "RAW_URI", "HTTP_X_VERCEL_ORIGINAL_PATH", "HTTP_HOST")
-    return jsonify({"debug_404": {k: env.get(k) for k in keys}}), 404
-
-
 # ---------------------------------------------------------------- helpers
 
 def base_url():
