@@ -1,18 +1,19 @@
 """Vercel serverless entry point.
 
-Exposes the Flask app from the project-root app module. All paths are
-rewritten here by vercel.json; static files under public/static are
-served by Vercel's CDN before the rewrite applies.
+Exposes the Flask app from the project-root app module. Static files
+under public/static are served by Vercel's CDN before rewrites apply.
 
-The rewrite invokes this function as /api/index, and the Python
-runtime may report that function path as PATH_INFO instead of the
-original request path, which would make every Flask route 404. The
-wrapper below restores the original path before Flask routes it.
+vercel.json rewrites every path here as /api/index?__path=/<original>,
+because the Python runtime reports the function path (/api/index) as
+PATH_INFO rather than the original request path, which would make
+every Flask route 404. The wrapper below restores the original path
+from __path (and removes it from the query string) before Flask
+routes the request.
 """
 
 import os
 import sys
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,24 +22,39 @@ from app import app as _flask_app  # noqa: E402
 _FUNCTION_PREFIXES = ("/api/index.py", "/api/index")
 
 
-def _original_path(environ):
+def _restore_path(environ):
+    pairs = parse_qsl(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    path = None
+    kept = []
+    for key, value in pairs:
+        if key == "__path" and path is None:
+            path = value
+        else:
+            kept.append((key, value))
+    if path is not None:
+        environ["QUERY_STRING"] = urlencode(kept)
+        return path or "/"
+
     header = environ.get("HTTP_X_VERCEL_ORIGINAL_PATH")
     if header:
-        return unquote(urlsplit(header).path) or "/"
-    path = environ.get("PATH_INFO") or "/"
+        header_path = unquote(urlsplit(header).path)
+        if header_path and header_path not in _FUNCTION_PREFIXES:
+            return header_path
+
+    current = environ.get("PATH_INFO") or "/"
     for prefix in _FUNCTION_PREFIXES:
-        if path == prefix:
+        if current == prefix:
             uri = environ.get("REQUEST_URI") or environ.get("RAW_URI") or ""
             uri_path = unquote(urlsplit(uri).path)
             if uri_path and uri_path not in _FUNCTION_PREFIXES:
                 return uri_path
             return "/"
-        if path.startswith(prefix + "/"):
-            return path[len(prefix):] or "/"
-    return path
+        if current.startswith(prefix + "/"):
+            return current[len(prefix):] or "/"
+    return current
 
 
 def app(environ, start_response):
-    environ["PATH_INFO"] = _original_path(environ)
+    environ["PATH_INFO"] = _restore_path(environ)
     environ["SCRIPT_NAME"] = ""
     return _flask_app(environ, start_response)
