@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Attendance{% endblock %} — Attendance</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..900&family=Inter:wght@300..900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="wordmark" href="/">Attendance <span class="dot"></span></a>
+      <nav class="nav">
+        <a href="/" class="{% if active == 'home' %}active{% endif %}">Home</a>
+        <a href="/session" class="{% if active == 'session' %}active{% endif %}">Session board</a>
+        <a href="/students" class="{% if active == 'students' %}active{% endif %}">Students</a>
+        <a href="/classroom" class="{% if active == 'classroom' %}active{% endif %}">Classroom</a>
+        <a href="/checkin" class="{% if active == 'checkin' %}active{% endif %}">Check in</a>
+      </nav>
+      <div class="topbar-status">
+        <span id="session-pill" class="pill pill-grey">No session</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    {% block content %}{% endblock %}
+    <footer class="footer">
+      Face + live-location attendance. Only 128-number face descriptors are
+      stored — never photos. Location comes from the device OS, so it is
+      evidence, not proof; the rotating board code is what proves presence
+      in the room.
+    </footer>
+  </main>
+
+  <script>
+    // Session status pill in the top bar, refreshed every 10 seconds.
+    async function refreshPill() {
+      try {
+        const res = await fetch("/api/session/current");
+        const s = await res.json();
+        const pill = document.getElementById("session-pill");
+        if (s.active) {
+          pill.className = "pill pill-green";
+          pill.textContent = "Session live · " + s.present_count + "/" + s.total_students + " present";
+        } else {
+          pill.className = "pill pill-grey";
+          pill.textContent = "No session";
+        }
+      } catch (e) { /* server unreachable — leave the pill as is */ }
+    }
+    refreshPill();
+    setInterval(refreshPill, 10000);
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

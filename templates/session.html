@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% set active = "session" %}
+{% block title %}Session board{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Session board</h1>
+  <p>Start a session and show this page on the board. Students scan the code
+  from their seats — it changes every 60 seconds, and the old code stops
+  working the moment the new one appears.</p>
+</div>
+
+<div id="notice"></div>
+
+<div class="card board" id="board-card">
+  <div id="board-idle">
+    <h2>No session running</h2>
+    <p class="sub" style="margin-bottom: 20px;">Pick a mode and start. The board
+    shows one large QR code and a 6-digit code for students who type it in.</p>
+    <div class="btn-row" style="justify-content: center;">
+      <button class="btn btn-primary" id="start-rotating">Start session — rotating code</button>
+      <button class="btn btn-secondary" id="start-static">Static code (10 min, no display)</button>
+    </div>
+    <p class="hint" style="margin-top: 16px;">Rotating is the default: a new code
+    every 60 seconds, shown on the board. Static is the fallback for rooms with
+    no display — one code for the class, not accepted after 10 minutes.</p>
+  </div>
+
+  <div id="board-live" style="display: none;">
+    <span class="pill pill-green" id="mode-pill">Rotating code</span>
+    <div class="qr-frame" style="margin-top: 20px;">
+      <img id="qr-img" src="" alt="Check-in QR code">
+    </div>
+    <div class="board-code" id="board-code">······</div>
+    <div class="board-code-label">6-digit code — for students who type it in</div>
+    <div class="countdown" id="countdown">
+      <svg width="76" height="76" viewBox="0 0 76 76">
+        <circle class="ring-bg" cx="38" cy="38" r="32"></circle>
+        <circle class="ring-fg" id="ring" cx="38" cy="38" r="32"></circle>
+      </svg>
+      <div class="count" id="count-num">60</div>
+    </div>
+    <p class="checkin-url">Students without a camera: open
+      <code id="base-url"></code> and type the code above.</p>
+    <div class="btn-row" style="justify-content: center; margin-top: 20px;">
+      <button class="btn btn-danger" id="end-session">End session</button>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+  <div style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+    <h2>Register</h2>
+    <div class="btn-row">
+      <a class="btn btn-secondary" style="padding: 7px 14px; font-size: 13.5px;" id="export-csv" href="/export/csv">Download CSV</a>
+      <a class="btn btn-secondary" style="padding: 7px 14px; font-size: 13.5px;" id="export-xlsx" href="/export/xlsx">Download Excel</a>
+    </div>
+  </div>
+  <p class="sub" id="register-sub">Live — updates as students check in.</p>
+  <div id="register"><p class="empty">No session running.</p></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+let lastCode = null;
+let sessionId = null;
+const CIRC = 2 * Math.PI * 32;
+$("ring").style.strokeDasharray = CIRC;
+
+function showNotice(html, cls) {
+  $("notice").innerHTML = `<div class="notice ${cls || ""}">${html}</div>`;
+}
+
+async function startSession(mode) {
+  const res = await fetch("/api/session/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    showNotice(`<strong>Could not start.</strong> ${data.error || "Try again."}`, "error");
+    return;
+  }
+  $("notice").innerHTML = "";
+  lastCode = null;
+  refresh();
+}
+
+$("start-rotating").addEventListener("click", () => startSession("rotating"));
+$("start-static").addEventListener("click", () => startSession("static"));
+
+$("end-session").addEventListener("click", async () => {
+  if (!confirm("End this session? Students will no longer be able to check in.")) return;
+  await fetch("/api/session/end", { method: "POST" });
+  refresh();
+});
+
+function fmtCountdown(s, mode) {
+  if (mode === "static") {
+    const m = Math.floor(s / 60), sec = s % 60;
+    return `${m}:${String(sec).padStart(2, "0")}`;
+  }
+  return String(s);
+}
+
+async function refresh() {
+  const s = await (await fetch("/api/session/current")).json();
+  const live = s.active;
+  $("board-idle").style.display = live ? "none" : "block";
+  $("board-live").style.display = live ? "block" : "none";
+  if (!live) {
+    $("register").innerHTML = '<p class="empty">No session running.</p>';
+    $("register-sub").textContent = "Live — updates as students check in.";
+    return;
+  }
+  sessionId = s.session_id;
+  $("mode-pill").textContent = s.mode === "rotating"
+    ? "Rotating code · new code every 60 s"
+    : "Static code · closes after 10 min";
+  $("board-code").textContent = s.code;
+  $("base-url").textContent = s.base_url + "/checkin";
+  $("export-csv").href = `/export/csv?session_id=${s.session_id}`;
+  $("export-xlsx").href = `/export/xlsx?session_id=${s.session_id}`;
+  const total = s.mode === "rotating" ? 60 : 600;
+  const frac = Math.max(0, s.seconds_remaining / total);
+  $("ring").style.strokeDashoffset = CIRC * (1 - frac);
+  $("count-num").textContent = fmtCountdown(s.seconds_remaining, s.mode);
+  $("countdown").classList.toggle("low", s.seconds_remaining <= 10);
+  if (s.code !== lastCode) {
+    lastCode = s.code;
+    $("qr-img").src = "/api/session/qr.png?t=" + Date.now();
+  }
+  $("register-sub").textContent =
+    `${s.present_count} of ${s.total_students} students present · live`;
+  loadRegister();
+}
+
+async function loadRegister() {
+  if (!sessionId) return;
+  const rows = await (await fetch(`/api/attendance?session_id=${sessionId}`)).json();
+  const box = $("register");
+  if (!rows.length) {
+    box.innerHTML = '<p class="empty">Nobody has checked in yet.</p>';
+    return;
+  }
+  const pill = (s) => s === "present" ? "pill-green"
+    : s === "duplicate" ? "pill-amber" : "pill-red";
+  box.innerHTML = '<table><thead><tr><th>Student</th><th>Roll</th><th>Time</th>' +
+    '<th class="num">Face match</th><th class="num">Distance</th><th>Status</th><th>Note</th></tr></thead><tbody>' +
+    rows.map((r) =>
+      `<tr><td>${r.name}</td><td>${r.roll_number}</td><td>${r.checked_in_at}</td>` +
+      `<td class="num">${r.match_pct !== null ? r.match_pct + "%" : "—"}</td>` +
+      `<td class="num">${r.distance_m !== null ? r.distance_m + " m" : "—"}</td>` +
+      `<td><span class="pill ${pill(r.status)}">${r.status}</span></td>` +
+      `<td style="color: var(--muted); font-size: 13px;">${r.reason || ""}</td></tr>`
+    ).join("") + "</tbody></table>";
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+{% endblock %}

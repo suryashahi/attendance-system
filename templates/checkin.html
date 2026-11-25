@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% set active = "checkin" %}
+{% block title %}Check in{% endblock %}
+{% block head %}
+<script src="/static/js/face-api.min.js"></script>
+<script src="/static/js/face.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Check in</h1>
+  <p>Enter the code from the board, take a selfie, and share your location.
+  Attendance is marked only if all three check out.</p>
+</div>
+
+<div id="notice"></div>
+
+<div class="card" id="checkin-card">
+  <div id="step-form">
+    <div class="field-row">
+      <div class="field">
+        <label for="roll">Roll number</label>
+        <input type="text" id="roll" autocomplete="off" placeholder="e.g. 12" required>
+      </div>
+      <div class="field">
+        <label for="code">Board code</label>
+        <input type="tel" id="code" inputmode="numeric" maxlength="6"
+               autocomplete="off" placeholder="6 digits" value="{{ code }}" required>
+      </div>
+    </div>
+    <p class="hint" id="code-hint"></p>
+
+    <div class="video-shell" style="margin: 16px 0;">
+      <video id="video" autoplay muted playsinline style="display: none;"></video>
+      <div class="face-frame" id="frame" style="display: none;"></div>
+      <div class="overlay" id="video-overlay">
+        <span id="model-status"><span class="spinner"></span> Loading face model…</span>
+      </div>
+    </div>
+    <div class="btn-row" style="margin-bottom: 16px;">
+      <button class="btn btn-secondary" id="start-cam" disabled>Start camera</button>
+      <button class="btn btn-secondary" id="take-selfie" disabled>Take selfie</button>
+      <label class="btn btn-secondary" style="cursor: pointer;">
+        Upload a photo
+        <input type="file" id="photo" accept="image/*" style="display: none;">
+      </label>
+    </div>
+    <p class="hint" id="face-status">Your face is checked in this browser —
+    only the 128 face numbers are sent, never the photo.</p>
+
+    <div class="field" style="margin-top: 16px;">
+      <button class="btn btn-secondary" id="get-location">Share my location</button>
+      <p class="hint" id="loc-status">Location is needed to confirm you are
+      inside the classroom radius.</p>
+    </div>
+
+    <button class="btn btn-primary btn-block" id="submit-btn" disabled
+            style="margin-top: 8px;">Mark my attendance</button>
+  </div>
+
+  <div id="step-result" style="display: none;">
+    <div class="result-big">
+      <div class="mark ok" id="result-mark">✓</div>
+      <h2 id="result-title">Attendance marked</h2>
+      <p class="sub" id="result-sub" style="margin-top: 8px;"></p>
+      <div class="result-grid" id="result-grid"></div>
+    </div>
+    <div class="btn-row" style="justify-content: center; margin-top: 24px;">
+      <button class="btn btn-secondary" id="try-again">Check in again</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+let descriptor = null;
+let position = null;
+let stream = null;
+
+function showNotice(html, cls) {
+  $("notice").innerHTML = `<div class="notice ${cls || ""}">${html}</div>`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function updateSubmit() {
+  $("submit-btn").disabled = !(descriptor && position &&
+    $("roll").value.trim() && $("code").value.trim().length === 6);
+}
+["roll", "code"].forEach((id) =>
+  $(id).addEventListener("input", updateSubmit));
+
+loadFaceModels().then(() => {
+  $("model-status").textContent = "Camera is off — start it, or upload a photo.";
+  $("start-cam").disabled = false;
+}).catch(() => {
+  $("model-status").textContent = "Face model failed to load. Reload the page.";
+});
+
+$("start-cam").addEventListener("click", async () => {
+  try {
+    stream = await startCamera($("video"));
+    $("video").style.display = "block";
+    $("frame").style.display = "block";
+    $("video-overlay").style.display = "none";
+    $("take-selfie").disabled = false;
+    $("start-cam").textContent = "Camera on";
+    $("start-cam").disabled = true;
+  } catch (e) {
+    showNotice("<strong>Camera blocked.</strong> Allow camera access, or upload a photo instead. " +
+      "On a phone, open this page over HTTPS — the address must start with https://.", "error");
+  }
+});
+
+async function scanFrom(source) {
+  $("face-status").textContent = "Reading your face…";
+  try {
+    const d = source === "video"
+      ? await descriptorFromVideo($("video"))
+      : await descriptorFromFile(source);
+    if (!d) {
+      $("face-status").textContent = "No face found — look straight at the camera in good light and try again.";
+      return;
+    }
+    descriptor = d;
+    $("face-status").textContent = "Selfie captured. Now share your location below.";
+    updateSubmit();
+  } catch (e) {
+    $("face-status").textContent = "Could not read a face — try again.";
+  }
+}
+
+$("take-selfie").addEventListener("click", () => scanFrom("video"));
+$("photo").addEventListener("change", (e) => {
+  if (e.target.files[0]) scanFrom(e.target.files[0]);
+});
+
+$("get-location").addEventListener("click", async () => {
+  $("loc-status").textContent = "Getting your location…";
+  try {
+    position = await getPosition();
+    $("loc-status").textContent =
+      `Location shared (accuracy ±${Math.round(position.accuracy)} m).`;
+    updateSubmit();
+  } catch (e) {
+    $("loc-status").textContent = e.message;
+  }
+});
+
+// Code expiry hint: show how long the typed code has left.
+async function codeHint() {
+  const code = $("code").value.trim();
+  if (code.length !== 6) { $("code-hint").textContent = ""; return; }
+  try {
+    const s = await (await fetch("/api/session/current")).json();
+    if (!s.active) {
+      $("code-hint").textContent = "No session is running right now.";
+    } else if (s.code === code) {
+      $("code-hint").textContent = s.mode === "rotating"
+        ? `This code is current — it changes in ${s.seconds_remaining} s.`
+        : `This code is current — it closes in ${Math.floor(s.seconds_remaining / 60)} min ${s.seconds_remaining % 60} s.`;
+    } else {
+      $("code-hint").textContent = "That is not the current board code — check the board and try again.";
+    }
+  } catch (e) { /* ignore */ }
+}
+$("code").addEventListener("input", codeHint);
+codeHint();
+setInterval(codeHint, 5000);
+
+$("submit-btn").addEventListener("click", async () => {
+  $("submit-btn").disabled = true;
+  $("submit-btn").textContent = "Verifying…";
+  const res = await fetch("/api/checkin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      roll_number: $("roll").value.trim(),
+      code: $("code").value.trim(),
+      descriptor,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    }),
+  });
+  const data = await res.json();
+  stopStream(stream);
+  $("step-form").style.display = "none";
+  $("step-result").style.display = "block";
+  const ok = data.status === "present";
+  $("result-mark").className = "mark " + (ok ? "ok" : "no");
+  $("result-mark").textContent = ok ? "✓" : "✕";
+  $("result-title").textContent = ok
+    ? `Attendance marked${data.student ? ", " + data.student : ""}`
+    : data.status === "duplicate" ? "Already marked" : "Not marked";
+  $("result-sub").textContent = ok
+    ? "Face, code and location all checked out."
+    : (data.reason || "Something went wrong — try again.");
+  $("result-grid").innerHTML =
+    `<div class="cell"><div class="v">${data.match_pct !== null && data.match_pct !== undefined ? data.match_pct + "%" : "—"}</div><div class="k">Face match</div></div>` +
+    `<div class="cell"><div class="v">${data.distance_m !== null && data.distance_m !== undefined ? data.distance_m + " m" : "—"}</div><div class="k">From classroom</div></div>` +
+    `<div class="cell"><div class="v">${data.status}</div><div class="k">Result</div></div>`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+$("try-again").addEventListener("click", () => {
+  $("step-result").style.display = "none";
+  $("step-form").style.display = "block";
+  $("submit-btn").disabled = false;
+  $("submit-btn").textContent = "Mark my attendance";
+  codeHint();
+});
+</script>
+{% endblock %}

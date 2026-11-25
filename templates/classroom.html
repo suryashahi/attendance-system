@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% set active = "classroom" %}
+{% block title %}Classroom{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Classroom</h1>
+  <p>Pin the classroom once. Check-ins are accepted only from phones inside
+  this circle — 30 to 50 metres, because phone GPS drifts 10–20 metres
+  even when standing still, and worse indoors.</p>
+</div>
+
+<div id="notice"></div>
+
+<div class="card">
+  <h2>Location</h2>
+  <p class="sub">Stand in the classroom and use your current location, or
+  type the coordinates from a map.</p>
+  <form id="room-form">
+    <div class="field">
+      <label for="name">Classroom name</label>
+      <input type="text" id="name" value="Classroom" autocomplete="off">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="latitude">Latitude</label>
+        <input type="text" id="latitude" inputmode="decimal" placeholder="27.7172" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="longitude">Longitude</label>
+        <input type="text" id="longitude" inputmode="decimal" placeholder="85.3240" autocomplete="off">
+      </div>
+    </div>
+    <button type="button" class="btn btn-secondary" id="use-location">
+      Use my current location
+    </button>
+    <p class="hint" id="loc-hint"></p>
+
+    <div class="field" style="margin-top: 20px;">
+      <label for="radius">Geofence radius — <span id="radius-val">40</span> m</label>
+      <input type="range" id="radius" min="30" max="50" step="5" value="40">
+      <p class="hint">30 m is stricter; 50 m is more forgiving of GPS drift.
+      A 5–10 m radius would falsely reject students who are actually in the room.</p>
+    </div>
+
+    <div class="field">
+      <label for="wifi">Classroom Wi-Fi name <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
+      <input type="text" id="wifi" placeholder="e.g. College-WiFi" autocomplete="off">
+      <p class="hint">A bonus check only — never required, since not every
+      classroom has Wi-Fi. Left blank, it is simply not used.</p>
+    </div>
+
+    <div class="btn-row">
+      <button type="submit" class="btn btn-primary">Save classroom</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+const notice = $("notice");
+
+function showNotice(html, cls) {
+  notice.innerHTML = `<div class="notice ${cls || ""}">${html}</div>`;
+}
+
+async function load() {
+  const room = await (await fetch("/api/classroom")).json();
+  if (room.configured) {
+    $("name").value = room.name;
+    $("latitude").value = room.latitude;
+    $("longitude").value = room.longitude;
+    $("radius").value = room.radius_m;
+    $("radius-val").textContent = room.radius_m;
+    $("wifi").value = room.wifi_ssid || "";
+  }
+}
+
+$("radius").addEventListener("input", (e) => {
+  $("radius-val").textContent = e.target.value;
+});
+
+$("use-location").addEventListener("click", async () => {
+  $("loc-hint").textContent = "Getting your location…";
+  try {
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject,
+        { enableHighAccuracy: true, timeout: 15000 });
+    });
+    $("latitude").value = pos.coords.latitude.toFixed(6);
+    $("longitude").value = pos.coords.longitude.toFixed(6);
+    $("loc-hint").textContent =
+      `Location set (accuracy ±${Math.round(pos.coords.accuracy)} m).`;
+  } catch (e) {
+    $("loc-hint").textContent =
+      "Could not get your location — allow location access, or type the coordinates.";
+  }
+});
+
+$("room-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    name: $("name").value.trim(),
+    latitude: $("latitude").value.trim(),
+    longitude: $("longitude").value.trim(),
+    radius_m: parseInt($("radius").value, 10),
+    wifi_ssid: $("wifi").value.trim(),
+  };
+  const res = await fetch("/api/classroom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (res.ok) {
+    showNotice(`<strong>Classroom saved.</strong> ${data.name} — ` +
+      `${data.latitude}, ${data.longitude}, ${data.radius_m} m radius.`);
+  } else {
+    showNotice(`<strong>Could not save.</strong> ${data.error || "Check the values and try again."}`, "error");
+  }
+});
+
+load();
+</script>
+{% endblock %}

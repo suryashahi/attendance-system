@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% set active = "home" %}
+{% block title %}Home{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Attendance, without the proxy problem.</h1>
+  <p>Students check in by scanning the code on the board, taking a selfie,
+  and sharing their location. All three are verified before attendance
+  is marked.</p>
+</div>
+
+<div id="setup-notice"></div>
+
+<div class="grid grid-3">
+  <div class="card">
+    <div class="stat-num" id="stat-students">–</div>
+    <div class="stat-label">Students enrolled</div>
+  </div>
+  <div class="card">
+    <div class="stat-num" id="stat-present">–</div>
+    <div class="stat-label">Present today</div>
+  </div>
+  <div class="card">
+    <div class="stat-num" id="stat-radius">–</div>
+    <div class="stat-label">Geofence radius</div>
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-top: 16px;">
+  <div class="card">
+    <h2>How a class runs</h2>
+    <ol class="steps" style="margin-top: 16px;">
+      <li><strong>Teacher starts a session</strong> on the
+        <a href="/session">session board</a>. A large QR code appears with a
+        6-digit code that changes every 60 seconds.</li>
+      <li><strong>Students scan the board</strong> from their seats, take a
+        selfie, and share their location — no app to install.</li>
+      <li><strong>Attendance is marked</strong> only if the code is current,
+        the face matches, and the phone is inside the classroom radius.</li>
+    </ol>
+    <div class="btn-row" style="margin-top: 20px;">
+      <a class="btn btn-primary" href="/session">Open the session board</a>
+      <a class="btn btn-secondary" href="/students">Enroll students</a>
+    </div>
+  </div>
+  <div class="card">
+    <h2>What stops the cheating</h2>
+    <p class="sub">The checks, in plain language.</p>
+    <ul style="margin: 0; padding-left: 18px; color: var(--ink-soft); font-size: 14.5px;">
+      <li style="margin-bottom: 10px;"><strong>Rotating code.</strong> A photo of the
+        QR shared on WhatsApp expires within 60 seconds — the old code dies
+        the moment the new one appears.</li>
+      <li style="margin-bottom: 10px;"><strong>Face match.</strong> The selfie must
+        match the face enrolled for that roll number.</li>
+      <li style="margin-bottom: 10px;"><strong>Location.</strong> The phone must be
+        within the classroom radius (30–50&nbsp;m, to allow for GPS drift).</li>
+      <li><strong>Static fallback.</strong> In a room with no display, one code
+        works for the class but stops being accepted after 10 minutes.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+  <h2>Recent attempts</h2>
+  <p class="sub">Latest check-ins across all sessions.</p>
+  <div id="recent"><p class="empty">Loading…</p></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function load() {
+  const status = await (await fetch("/api/status")).json();
+  document.getElementById("stat-students").textContent = status.students;
+  document.getElementById("stat-present").textContent = status.present_today;
+  document.getElementById("stat-radius").textContent =
+    status.classroom ? status.classroom.radius_m + " m" : "not set";
+
+  const notice = document.getElementById("setup-notice");
+  if (!status.classroom) {
+    notice.innerHTML = '<div class="notice warn"><strong>Classroom not set yet.</strong> ' +
+      'Pin the classroom location before the first session — ' +
+      '<a href="/classroom">set it up now</a>.</div>';
+  } else if (status.students === 0) {
+    notice.innerHTML = '<div class="notice"><strong>No students enrolled yet.</strong> ' +
+      'Enroll each student once with a face scan — ' +
+      '<a href="/students">enroll students</a>.</div>';
+  }
+
+  const rows = await (await fetch("/api/attendance")).json();
+  const box = document.getElementById("recent");
+  if (!rows.length) {
+    box.innerHTML = '<p class="empty">No check-in attempts yet.</p>';
+    return;
+  }
+  const pill = (s) => s === "present" ? "pill-green"
+    : s === "duplicate" ? "pill-amber" : "pill-red";
+  box.innerHTML = '<table><thead><tr><th>Student</th><th>Roll</th><th>Time</th>' +
+    '<th class="num">Face match</th><th class="num">Distance</th><th>Status</th></tr></thead><tbody>' +
+    rows.slice(0, 10).map((r) =>
+      `<tr><td>${r.name}</td><td>${r.roll_number}</td><td>${r.checked_in_at}</td>` +
+      `<td class="num">${r.match_pct !== null ? r.match_pct + "%" : "—"}</td>` +
+      `<td class="num">${r.distance_m !== null ? r.distance_m + " m" : "—"}</td>` +
+      `<td><span class="pill ${pill(r.status)}">${r.status}</span></td></tr>`
+    ).join("") + "</tbody></table>";
+}
+load();
+</script>
+{% endblock %}

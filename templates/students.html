@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% set active = "students" %}
+{% block title %}Students{% endblock %}
+{% block head %}
+<script src="/static/js/face-api.min.js"></script>
+<script src="/static/js/face.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Students</h1>
+  <p>Enroll each student once with a face scan. Only the 128 face numbers
+  are stored — never a photo. Check-ins later compare the live selfie
+  against these numbers.</p>
+</div>
+
+<div id="notice"></div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Enroll a student</h2>
+    <p class="sub">Face the camera, in good light, looking straight ahead.</p>
+    <div class="video-shell" style="margin-bottom: 16px;">
+      <video id="video" autoplay muted playsinline style="display: none;"></video>
+      <div class="face-frame" id="frame" style="display: none;"></div>
+      <div class="overlay" id="video-overlay">
+        <span id="model-status"><span class="spinner"></span> Loading face model…</span>
+      </div>
+    </div>
+    <div class="btn-row" style="margin-bottom: 16px;">
+      <button class="btn btn-secondary" id="start-cam" disabled>Start camera</button>
+      <button class="btn btn-secondary" id="scan-face" disabled>Scan face</button>
+      <label class="btn btn-secondary" style="cursor: pointer;">
+        Use a photo instead
+        <input type="file" id="photo" accept="image/*" style="display: none;">
+      </label>
+    </div>
+    <p class="hint" id="scan-status">The face model runs entirely in this
+    browser — nothing is uploaded.</p>
+    <form id="enroll-form" style="margin-top: 16px;">
+      <div class="field">
+        <label for="name">Full name</label>
+        <input type="text" id="name" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="roll">Roll number</label>
+        <input type="text" id="roll" autocomplete="off" required>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="enroll-btn" disabled>
+        Enroll student
+      </button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Enrolled</h2>
+    <p class="sub" id="enrolled-count"></p>
+    <div id="student-list"><p class="empty">Loading…</p></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $ = (id) => document.getElementById(id);
+let descriptor = null;
+let stream = null;
+
+function showNotice(html, cls) {
+  $("notice").innerHTML = `<div class="notice ${cls || ""}">${html}</div>`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+loadFaceModels().then(() => {
+  $("model-status").textContent = "Camera is off — start it, or use a photo.";
+  $("start-cam").disabled = false;
+}).catch(() => {
+  $("model-status").textContent = "Face model failed to load. Reload the page.";
+});
+
+$("start-cam").addEventListener("click", async () => {
+  try {
+    stream = await startCamera($("video"));
+    $("video").style.display = "block";
+    $("frame").style.display = "block";
+    $("video-overlay").style.display = "none";
+    $("scan-face").disabled = false;
+    $("start-cam").textContent = "Camera on";
+    $("start-cam").disabled = true;
+  } catch (e) {
+    showNotice("<strong>Camera blocked.</strong> Allow camera access, or use a photo instead. " +
+      "On a phone, this page must be opened over HTTPS.", "error");
+  }
+});
+
+async function scanFrom(source) {
+  $("scan-status").textContent = "Scanning face…";
+  try {
+    const d = source === "video"
+      ? await descriptorFromVideo($("video"))
+      : await descriptorFromFile(source);
+    if (!d) {
+      $("scan-status").textContent = "No face found — face the camera in good light and try again.";
+      return;
+    }
+    descriptor = d;
+    $("scan-status").textContent = "Face captured — 128 face numbers ready. Fill in the name and roll number, then enroll.";
+    $("enroll-btn").disabled = false;
+  } catch (e) {
+    $("scan-status").textContent = "Scan failed — try again.";
+  }
+}
+
+$("scan-face").addEventListener("click", () => scanFrom("video"));
+$("photo").addEventListener("change", (e) => {
+  if (e.target.files[0]) scanFrom(e.target.files[0]);
+});
+
+$("enroll-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!descriptor) return;
+  const res = await fetch("/api/students", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: $("name").value.trim(),
+      roll_number: $("roll").value.trim(),
+      descriptor,
+    }),
+  });
+  const data = await res.json();
+  if (res.ok) {
+    showNotice(`<strong>${data.name} enrolled.</strong> Roll number ${data.roll_number}.`);
+    $("name").value = "";
+    $("roll").value = "";
+    descriptor = null;
+    $("enroll-btn").disabled = true;
+    $("scan-status").textContent = "Ready for the next student.";
+    loadList();
+  } else {
+    showNotice(`<strong>Could not enroll.</strong> ${data.error || "Try again."}`, "error");
+  }
+});
+
+async function loadList() {
+  const rows = await (await fetch("/api/students")).json();
+  $("enrolled-count").textContent =
+    rows.length ? `${rows.length} student${rows.length === 1 ? "" : "s"}` : "Nobody enrolled yet.";
+  const box = $("student-list");
+  if (!rows.length) {
+    box.innerHTML = '<p class="empty">No students yet — enroll the first one on the left.</p>';
+    return;
+  }
+  box.innerHTML = '<table><thead><tr><th>Name</th><th>Roll</th><th></th></tr></thead><tbody>' +
+    rows.map((r) =>
+      `<tr><td>${r.name}</td><td>${r.roll_number}</td>` +
+      `<td style="text-align: right;"><button class="btn btn-danger" style="padding: 5px 12px; font-size: 13px;" ` +
+      `onclick="removeStudent(${r.id}, '${r.name.replace(/'/g, "\\'")}')">Remove</button></td></tr>`
+    ).join("") + "</tbody></table>";
+}
+
+async function removeStudent(id, name) {
+  if (!confirm(`Remove ${name}? Their attendance records stay, but they can no longer check in.`)) return;
+  await fetch(`/api/students/${id}`, { method: "DELETE" });
+  loadList();
+}
+
+loadList();
+</script>
+{% endblock %}
