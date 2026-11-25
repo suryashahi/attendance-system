@@ -33,7 +33,9 @@ def _restore_path(environ):
             kept.append((key, value))
     if path is not None:
         environ["QUERY_STRING"] = urlencode(kept)
-        return path or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+        return path
 
     header = environ.get("HTTP_X_VERCEL_ORIGINAL_PATH")
     if header:
