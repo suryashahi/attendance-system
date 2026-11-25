@@ -33,8 +33,16 @@ def _restore_path(environ):
             kept.append((key, value))
     if path is not None:
         environ["QUERY_STRING"] = urlencode(kept)
-        if not path.startswith("/"):
-            path = "/" + path
+        # The rewrite capture may arrive with no leading slash or a
+        # doubled one; normalize to exactly one.
+        path = "/" + path.lstrip("/")
+        for prefix in _FUNCTION_PREFIXES:
+            if path == prefix:
+                path = "/"
+                break
+            if path.startswith(prefix + "/"):
+                path = path[len(prefix):] or "/"
+                break
         return path
 
     header = environ.get("HTTP_X_VERCEL_ORIGINAL_PATH")
